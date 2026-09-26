@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Globalization;
 using System.Windows;
 using System.Windows.Input;
@@ -19,6 +20,7 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
     private readonly IProcessMetricsService _processes;
     private readonly IHardwareInventoryService _inventory;
     private readonly ICleanupService _cleanup;
+    private readonly ILargeFileService _largeFiles;
     private readonly IStartupService _startup;
     private readonly Dictionary<int, List<double>> _cpuTrends = [];
     private readonly Dictionary<int, List<double>> _memoryTrends = [];
@@ -27,28 +29,43 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
     private readonly CancellationTokenSource _life = new();
     private CancellationTokenSource? _operation;
     private CleanupScanResult? _scan;
-    private bool _busy, _windowVisible, _startupEnabled, _cpuExpanded, _memoryExpanded;
+    private bool _busy, _windowVisible, _startupEnabled, _cpuExpanded, _memoryExpanded, _isLargeFilesMode;
     private string _cpuUsage = "Collecting data…", _memoryUsage = "Collecting data…";
     private string _memoryDetail = "", _cpuTemp = "Collecting data…", _gpuTemp = "Collecting data…";
+    private string _gpuUsage = "Collecting data…";
     private string _fansStatus = "Collecting data…", _lastUpdated = "—";
     private string _cleanupStatus = "Scan temporary files to see what can be removed.";
     private string _hardwareStatus = "Open this page to load your hardware details.";
     private string _estimated = "0 B", _cleanupResult = "";
     private string _cpuProcessStatus = "Select to inspect the busiest processes.";
     private string _memoryProcessStatus = "Select to inspect memory use by process.";
-    private double _cpuLoad, _memoryLoad;
+    private string _largeFilesStatus = "Choose personal folders, then search for large files.";
+    private string _largeFilesActionResult = "";
+    private int _largeFileAgeDays = 180;
+    private int _largeFileMinimumMegabytes = 500;
+    private double _cpuLoad, _memoryLoad, _gpuLoad;
     private ulong _totalMemoryBytes;
 
     public MainViewModel(ISystemMetricsService metrics, ISensorService sensors,
         IProcessMetricsService processes,
-        IHardwareInventoryService inventory, ICleanupService cleanup, IStartupService startup)
+        IHardwareInventoryService inventory, ICleanupService cleanup, ILargeFileService largeFiles,
+        IStartupService startup)
     {
         _metrics = metrics; _sensors = sensors; _processes = processes;
-        _inventory = inventory; _cleanup = cleanup; _startup = startup;
+        _inventory = inventory; _cleanup = cleanup; _largeFiles = largeFiles; _startup = startup;
         _startupEnabled = startup.IsEnabled;
+        foreach (var location in _largeFiles.GetDefaultLocations())
+            LargeFileLocations.Add(new ScanLocationOption(location.Name, location.Path, true));
         ScanCommand = new RelayCommand(() => _ = ScanAsync(), () => !Busy);
         CleanCommand = new RelayCommand(() => _ = CleanAsync(), () => !Busy && _scan?.Candidates.Count > 0);
         CancelCommand = new RelayCommand(() => _operation?.Cancel(), () => Busy);
+        ShowTemporaryFilesCommand = new RelayCommand(() => IsLargeFilesMode = false);
+        ShowLargeFilesCommand = new RelayCommand(() => IsLargeFilesMode = true);
+        SearchLargeFilesCommand = new RelayCommand(() => _ = SearchLargeFilesAsync(), () => !Busy);
+        AddLargeFolderCommand = new RelayCommand(AddLargeFolder);
+        SelectAllLargeFilesCommand = new RelayCommand(() => SetLargeFileSelection(true), () => !Busy && LargeFileItems.Count > 0);
+        ClearLargeFileSelectionCommand = new RelayCommand(() => SetLargeFileSelection(false), () => !Busy && LargeFileItems.Count > 0);
+        MoveLargeFilesCommand = new RelayCommand(() => _ = MoveLargeFilesAsync(), () => !Busy && LargeFileItems.Any(x => x.IsSelected));
         RefreshHardwareCommand = new RelayCommand(() => _ = RefreshHardwareAsync());
         ToggleStartupCommand = new RelayCommand(ToggleStartup);
         ToggleCpuCommand = new RelayCommand(ToggleCpu);
@@ -62,6 +79,13 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
     public RelayCommand ScanCommand { get; }
     public RelayCommand CleanCommand { get; }
     public RelayCommand CancelCommand { get; }
+    public RelayCommand ShowTemporaryFilesCommand { get; }
+    public RelayCommand ShowLargeFilesCommand { get; }
+    public RelayCommand SearchLargeFilesCommand { get; }
+    public RelayCommand AddLargeFolderCommand { get; }
+    public RelayCommand SelectAllLargeFilesCommand { get; }
+    public RelayCommand ClearLargeFileSelectionCommand { get; }
+    public RelayCommand MoveLargeFilesCommand { get; }
     public RelayCommand RefreshHardwareCommand { get; }
     public RelayCommand ToggleStartupCommand { get; }
     public RelayCommand ToggleCpuCommand { get; }
@@ -73,6 +97,13 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
     public ObservableCollection<HardwareSection> Hardware { get; } = [];
     public ObservableCollection<ProcessRow> CpuProcesses { get; } = [];
     public ObservableCollection<ProcessRow> MemoryProcesses { get; } = [];
+    public ObservableCollection<ScanLocationOption> LargeFileLocations { get; } = [];
+    public ObservableCollection<LargeFileItem> LargeFileItems { get; } = [];
+    public IReadOnlyList<FilterOption> LargeFileSizeOptions { get; } =
+        [new("100 MiB", 100), new("500 MiB", 500), new("1 GiB", 1024)];
+    public IReadOnlyList<FilterOption> LargeFileAgeOptions { get; } =
+        [new("90 days", 90), new("180 days", 180), new("365 days", 365)];
+    public Func<string?>? PickLargeFolder { get; set; }
 
     public bool Busy { get => _busy; private set { if (Set(ref _busy, value)) CommandManager.InvalidateRequerySuggested(); } }
     public bool WindowVisible
@@ -80,6 +111,18 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
         get => _windowVisible;
         set { if (Set(ref _windowVisible, value) && !value) _processes.Reset(); }
     }
+    public bool IsLargeFilesMode
+    {
+        get => _isLargeFilesMode;
+        set { if (Set(ref _isLargeFilesMode, value)) Notify(nameof(IsTemporaryFilesMode)); }
+    }
+    public bool IsTemporaryFilesMode => !IsLargeFilesMode;
+    public int LargeFileMinimumMegabytes { get => _largeFileMinimumMegabytes; set => Set(ref _largeFileMinimumMegabytes, value); }
+    public int LargeFileAgeDays { get => _largeFileAgeDays; set => Set(ref _largeFileAgeDays, value); }
+    public string LargeFilesStatus { get => _largeFilesStatus; private set => Set(ref _largeFilesStatus, value); }
+    public string LargeFilesActionResult { get => _largeFilesActionResult; private set => Set(ref _largeFilesActionResult, value); }
+    public string LargeFilesSelectedSummary =>
+        $"{LargeFileItems.Count(x => x.IsSelected)} selected  ·  {FormatBytes(LargeFileItems.Where(x => x.IsSelected).Sum(x => x.Candidate.Length))}";
     public bool CpuExpanded { get => _cpuExpanded; private set { if (Set(ref _cpuExpanded, value)) Notify(nameof(CpuToggleLabel)); } }
     public bool MemoryExpanded { get => _memoryExpanded; private set { if (Set(ref _memoryExpanded, value)) Notify(nameof(MemoryToggleLabel)); } }
     public string CpuToggleLabel => CpuExpanded ? "HIDE PROCESSES  −" : "TOP PROCESSES  +";
@@ -89,13 +132,40 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
     public bool StartupEnabled { get => _startupEnabled; private set => Set(ref _startupEnabled, value); }
     public bool StartupAvailable => _startup.IsDeployed;
     public string StartupLabel => StartupEnabled ? "Launch at sign-in: On" : "Launch at sign-in: Off";
-    public string CpuUsage { get => _cpuUsage; private set => Set(ref _cpuUsage, value); }
+    public string CpuUsage
+    {
+        get => _cpuUsage;
+        private set { if (Set(ref _cpuUsage, value)) Notify(nameof(FloatingCpuUsage)); }
+    }
     public double CpuLoad { get => _cpuLoad; private set => Set(ref _cpuLoad, value); }
-    public string MemoryUsage { get => _memoryUsage; private set => Set(ref _memoryUsage, value); }
+    public string MemoryUsage
+    {
+        get => _memoryUsage;
+        private set { if (Set(ref _memoryUsage, value)) Notify(nameof(FloatingMemoryUsage)); }
+    }
     public double MemoryLoad { get => _memoryLoad; private set => Set(ref _memoryLoad, value); }
     public string MemoryDetail { get => _memoryDetail; private set => Set(ref _memoryDetail, value); }
-    public string CpuTemperature { get => _cpuTemp; private set => Set(ref _cpuTemp, value); }
-    public string GpuTemperature { get => _gpuTemp; private set => Set(ref _gpuTemp, value); }
+    public string CpuTemperature
+    {
+        get => _cpuTemp;
+        private set { if (Set(ref _cpuTemp, value)) Notify(nameof(FloatingCpuTemperature)); }
+    }
+    public string GpuTemperature
+    {
+        get => _gpuTemp;
+        private set { if (Set(ref _gpuTemp, value)) Notify(nameof(FloatingGpuTemperature)); }
+    }
+    public string GpuUsage
+    {
+        get => _gpuUsage;
+        private set { if (Set(ref _gpuUsage, value)) Notify(nameof(FloatingGpuUsage)); }
+    }
+    public double GpuLoad { get => _gpuLoad; private set => Set(ref _gpuLoad, value); }
+    public string FloatingCpuTemperature => CompactReading(CpuTemperature, " °C", "°C");
+    public string FloatingGpuTemperature => CompactReading(GpuTemperature, " °C", "°C");
+    public string FloatingCpuUsage => CompactReading(CpuUsage, "%", "%");
+    public string FloatingGpuUsage => CompactReading(GpuUsage, "%", "%");
+    public string FloatingMemoryUsage => CompactReading(MemoryUsage, "%", "%");
     public string FansStatus { get => _fansStatus; private set => Set(ref _fansStatus, value); }
     public string LastUpdated { get => _lastUpdated; private set => Set(ref _lastUpdated, value); }
     public string CleanupStatus { get => _cleanupStatus; private set => Set(ref _cleanupStatus, value); }
@@ -103,6 +173,7 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
     public string CleanupResult { get => _cleanupResult; private set => Set(ref _cleanupResult, value); }
     public string HardwareStatus { get => _hardwareStatus; private set => Set(ref _hardwareStatus, value); }
     public static string Unavailable => "Not available";
+    public Func<int, long, bool>? ConfirmLargeFiles { get; set; }
 
     private void ToggleCpu()
     {
@@ -142,7 +213,7 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
             {
                 var value = await Task.Run(_metrics.Sample, _life.Token);
                 CpuUsage = value.CpuPercent is double cpu
-                    ? double.IsNaN(cpu) ? "Unavailable" : $"{cpu.ToString("0.#", English)}%"
+                    ? double.IsNaN(cpu) ? "Unavailable" : $"{Math.Round(cpu, MidpointRounding.AwayFromZero):0}%"
                     : "Collecting data…";
                 CpuLoad = value.CpuPercent is double load && !double.IsNaN(load) ? load : 0;
                 MemoryUsage = value.MemoryPercent is uint memory ? $"{memory}%" : "Unavailable";
@@ -171,13 +242,17 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
                 Replace(Fans, readings.Where(x => x.Kind == SensorKind.Fan));
                 CpuTemperature = Primary(CpuSensors, ["package", "tdie", "core average"]);
                 GpuTemperature = Primary(GpuSensors, ["core"]);
+                var gpuLoad = PrimaryGpuLoad(readings.Where(x => x.Kind == SensorKind.GpuLoad));
+                GpuLoad = gpuLoad?.Value ?? 0;
+                GpuUsage = gpuLoad is null ? Unavailable
+                    : $"{Math.Round(gpuLoad.Value, MidpointRounding.AwayFromZero):0}%";
                 FansStatus = Fans.Count == 0 ? Unavailable : $"{Fans.Count} sensor(s)";
             }
             catch (OperationCanceledException) { break; }
             catch (Exception ex)
             {
                 CpuSensors.Clear(); GpuSensors.Clear(); Fans.Clear();
-                CpuTemperature = Unavailable; GpuTemperature = Unavailable; FansStatus = Unavailable;
+                CpuTemperature = Unavailable; GpuTemperature = Unavailable; GpuUsage = Unavailable; GpuLoad = 0; FansStatus = Unavailable;
                 LocalLog.Error("hardware sensors", ex);
             }
             try { await Task.Delay(WindowVisible ? 5000 : 15000, _life.Token); }
@@ -291,9 +366,32 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
         foreach (var term in preferred)
         {
             var match = list.FirstOrDefault(x => x.Name.Contains(term, StringComparison.OrdinalIgnoreCase));
-            if (match is not null) return $"{match.Value.ToString("0.#", English)} °C";
+            if (match is not null) return $"{Math.Round(match.Value, MidpointRounding.AwayFromZero):0} °C";
         }
-        return list.Count > 0 ? $"{list[0].Value.ToString("0.#", English)} °C" : Unavailable;
+        return list.Count > 0 ? $"{Math.Round(list[0].Value, MidpointRounding.AwayFromZero):0} °C" : Unavailable;
+    }
+
+    private static SensorReading? PrimaryGpuLoad(IEnumerable<SensorReading> readings)
+    {
+        var list = readings.ToList();
+        return list.FirstOrDefault(x => x.Name.Contains("core", StringComparison.OrdinalIgnoreCase))
+            ?? list.FirstOrDefault(x => x.Name.Contains("total", StringComparison.OrdinalIgnoreCase))
+            ?? list.FirstOrDefault();
+    }
+
+    private static string CompactReading(string value, string suffixToRemove, string suffix)
+    {
+        if (!value.EndsWith(suffixToRemove, StringComparison.Ordinal))
+            return value switch
+            {
+                "Collecting data…" => "…",
+                "Unavailable" or "Not available" => "N/A",
+                _ => value
+            };
+        var numericPart = value[..^suffixToRemove.Length].Trim();
+        return double.TryParse(numericPart, NumberStyles.Float, English, out var number)
+            ? $"{Math.Round(number, MidpointRounding.AwayFromZero):0}{suffix}"
+            : "N/A";
     }
 
     private async Task ScanAsync()
@@ -317,6 +415,109 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
         catch (OperationCanceledException) { CleanupStatus = "Scan cancelled."; }
         catch (Exception ex) { CleanupStatus = "The scan could not be completed."; LocalLog.Error("cleanup scan", ex); }
         finally { _operation.Dispose(); _operation = null; Busy = false; }
+    }
+
+    private void AddLargeFolder()
+    {
+        string? chosen;
+        try { chosen = PickLargeFolder?.Invoke(); }
+        catch (Exception ex)
+        { LargeFilesStatus = "The folder picker could not be opened."; LocalLog.Error("large file folder picker", ex); return; }
+        if (string.IsNullOrWhiteSpace(chosen)) return;
+
+        if (!_largeFiles.IsSafeRoot(chosen, out var reason))
+        { LargeFilesStatus = reason; return; }
+
+        var fullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(chosen));
+        if (LargeFileLocations.Any(x => PathsOverlap(x.Path, fullPath)))
+        { LargeFilesStatus = "That folder is already included or overlaps another selected folder."; return; }
+
+        LargeFileLocations.Add(new ScanLocationOption(Path.GetFileName(fullPath), fullPath, true));
+        LargeFilesStatus = "Folder added. Search when you are ready.";
+    }
+
+    private async Task SearchLargeFilesAsync()
+    {
+        var roots = LargeFileLocations.Where(x => x.IsSelected).Select(x => x.Path).ToArray();
+        if (roots.Length == 0)
+        { LargeFilesStatus = "Select at least one personal folder to search."; return; }
+
+        Busy = true;
+        _operation = new CancellationTokenSource();
+        LargeFilesStatus = "Searching selected folders…";
+        LargeFilesActionResult = "";
+        LargeFileItems.Clear();
+        Notify(nameof(LargeFilesSelectedSummary));
+        try
+        {
+            var result = await _largeFiles.ScanAsync(roots,
+                (long)LargeFileMinimumMegabytes * 1024 * 1024, LargeFileAgeDays, _operation.Token);
+            foreach (var candidate in result.Candidates)
+            {
+                var item = new LargeFileItem(candidate);
+                item.PropertyChanged += LargeFileSelectionChanged;
+                LargeFileItems.Add(item);
+            }
+            LargeFilesStatus = result.Candidates.Count == 0
+                ? $"No files matched the selected size and age filters. {result.Skipped:N0} item(s) skipped."
+                : $"Found {result.Candidates.Count:N0} file(s) · {result.Skipped:N0} item(s) skipped · modified more than {LargeFileAgeDays} days ago.";
+            if (result.Warnings.Count > 0) LargeFilesStatus += " Some folders could not be fully scanned.";
+            Notify(nameof(LargeFilesSelectedSummary));
+        }
+        catch (OperationCanceledException)
+        { LargeFilesStatus = "Search cancelled."; }
+        catch (Exception ex)
+        { LargeFilesStatus = "The search could not be completed."; LocalLog.Error("large file search", ex); }
+        finally { _operation.Dispose(); _operation = null; Busy = false; }
+    }
+
+    private async Task MoveLargeFilesAsync()
+    {
+        var selectedItems = LargeFileItems.Where(x => x.IsSelected).ToArray();
+        var selected = selectedItems.Select(x => x.Candidate).ToArray();
+        var selectedBytes = selected.Sum(x => x.Length);
+        if (selected.Length == 0 || ConfirmLargeFiles?.Invoke(selected.Length, selectedBytes) != true) return;
+
+        Busy = true;
+        _operation = new CancellationTokenSource();
+        LargeFilesStatus = "Moving selected files to the Recycle Bin…";
+        try
+        {
+            var result = await _largeFiles.MoveToRecycleBinAsync(selected, _operation.Token);
+            foreach (var item in selectedItems) item.IsSelected = false;
+            LargeFilesActionResult = $"Moved to Recycle Bin: {result.Moved:N0} file(s) · {FormatBytes(result.MovedBytes)} · Skipped: {result.Skipped:N0}";
+            LargeFilesStatus = "Files in the Recycle Bin can be restored until the bin is emptied.";
+            Notify(nameof(LargeFilesSelectedSummary));
+        }
+        catch (OperationCanceledException)
+        { LargeFilesStatus = "Action cancelled. Some files may already have been moved; search again to refresh results."; }
+        catch (Exception ex)
+        { LargeFilesStatus = "Some files could not be moved. Search again to refresh results."; LocalLog.Error("large file cleanup", ex); }
+        finally { _operation.Dispose(); _operation = null; Busy = false; }
+    }
+
+    private void LargeFileSelectionChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(LargeFileItem.IsSelected))
+        {
+            Notify(nameof(LargeFilesSelectedSummary));
+            CommandManager.InvalidateRequerySuggested();
+        }
+    }
+
+    private void SetLargeFileSelection(bool selected)
+    {
+        foreach (var item in LargeFileItems) item.IsSelected = selected;
+        Notify(nameof(LargeFilesSelectedSummary));
+    }
+
+    private static bool PathsOverlap(string first, string second)
+    {
+        first = Path.TrimEndingDirectorySeparator(Path.GetFullPath(first));
+        second = Path.TrimEndingDirectorySeparator(Path.GetFullPath(second));
+        return string.Equals(first, second, StringComparison.OrdinalIgnoreCase) ||
+            first.StartsWith(second + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+            second.StartsWith(first + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task CleanAsync()
@@ -369,3 +570,41 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
 public sealed record ProcessRow(string Rank, string Name, string PidLabel, string Value,
     string Context, double RelativePercent, PointCollection TrendPoints,
     PointCollection AreaPoints, Brush Accent);
+
+public sealed record FilterOption(string Label, int Value);
+
+public sealed class ScanLocationOption : ViewModelBase
+{
+    private bool _isSelected;
+
+    public ScanLocationOption(string name, string path, bool isSelected)
+    { Name = name; Path = path; _isSelected = isSelected; }
+
+    public string Name { get; }
+    public string Path { get; }
+    public bool IsSelected { get => _isSelected; set => Set(ref _isSelected, value); }
+}
+
+public sealed class LargeFileItem : INotifyPropertyChanged
+{
+    private bool _isSelected;
+
+    public LargeFileItem(CleanupCandidate candidate) => Candidate = candidate;
+    public CleanupCandidate Candidate { get; }
+    public string RelativePath => Candidate.RelativePath;
+    public string Root => Candidate.Root;
+    public string Size => MainViewModel.FormatBytes(Candidate.Length);
+    public string LastModified => Candidate.LastWriteUtc.ToLocalTime().ToString("dd MMM yyyy", CultureInfo.GetCultureInfo("en-GB"));
+    public bool IsSelected
+    {
+        get => _isSelected;
+        set
+        {
+            if (_isSelected == value) return;
+            _isSelected = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsSelected)));
+        }
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+}

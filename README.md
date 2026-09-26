@@ -8,8 +8,10 @@ When the main window is hidden or minimised, a small circular floating shortcut 
 
 ## Requirements
 
-- Windows 11 x64
-- .NET 10 SDK to build (the distributed installer is self-contained)
+- Windows 11 x64 (the app targets `net10.0-windows` and is published for `win-x64`).
+- No separate .NET installation is required on a computer using the installer: the release is self-contained and includes the .NET 10.0.12 and Windows Desktop 10.0.12 runtimes.
+- To build from source: the .NET 10 SDK, internet access to `https://api.nuget.org/v3/index.json` for package restore, and PowerShell 7 or Windows PowerShell 5.1.
+- To rebuild the installer: Inno Setup 6 in addition to the build requirements.
 
 ## Develop and verify
 
@@ -44,6 +46,29 @@ LibreHardwareMonitorLib reads supported CPU and GPU temperatures and fan RPM. So
 
 ## Dependencies and licences
 
-- [LibreHardwareMonitorLib 0.9.6](https://www.nuget.org/packages/LibreHardwareMonitorLib/) — MPL 2.0; see its [third-party notices](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/blob/master/THIRD-PARTY-NOTICES.txt).
-- [System.Management 10.0.12](https://www.nuget.org/packages/System.Management/) — MIT.
+The application has no Python, Node.js, browser, database, or cloud-service dependency. `NuGet.Config` uses only nuget.org. These are the external NuGet libraries in the `win-x64` release; direct references are declared in `src/XinweiManager/XinweiManager.csproj`, and the remaining packages are brought in transitively by the hardware-monitoring library:
+
+| Package | Version | Dependency | Use / licence |
+|---|---:|---|---|
+| [LibreHardwareMonitorLib](https://www.nuget.org/packages/LibreHardwareMonitorLib/0.9.6) | 0.9.6 | Direct | CPU/GPU sensor and fan readings; MPL 2.0. See the project's [third-party notices](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/blob/master/THIRD-PARTY-NOTICES.txt). |
+| [System.Management](https://www.nuget.org/packages/System.Management/10.0.12) | 10.0.12 | Direct; also required by a transitive hardware package | Windows Management Instrumentation (WMI) hardware inventory; MIT. |
+| [DiskInfoToolkit](https://www.nuget.org/packages/DiskInfoToolkit/1.1.2) | 1.1.2 | Transitive | Disk information support used by LibreHardwareMonitorLib; MPL 2.0. |
+| [BlackSharp.Core](https://www.nuget.org/packages/BlackSharp.Core/1.0.7) | 1.0.7 | Transitive | Shared support library for DiskInfoToolkit and RAMSPDToolkit-NDD; MPL 2.0. |
+| [HidSharp](https://www.nuget.org/packages/HidSharp/2.6.4) | 2.6.4 | Transitive | Hardware device access used by LibreHardwareMonitorLib. |
+| [Mono.Posix.NETStandard](https://www.nuget.org/packages/Mono.Posix.NETStandard/1.0.0) | 1.0.0 | Transitive | Cross-platform compatibility support bundled by LibreHardwareMonitorLib. |
+| [RAMSPDToolkit-NDD](https://www.nuget.org/packages/RAMSPDToolkit-NDD/1.4.2) | 1.4.2 | Transitive | Memory SPD information support used by LibreHardwareMonitorLib; MPL 2.0. |
+| [System.IO.Ports](https://www.nuget.org/packages/System.IO.Ports/10.0.3) | 10.0.3 | Transitive | Serial-port support used by LibreHardwareMonitorLib; MIT. |
+
+The self-contained release also bundles the Microsoft .NET 10.0.12 `win-x64` runtime and Windows Desktop runtime (WPF/Windows Forms), plus framework libraries such as `System.CodeDom` and `System.IO.FileSystem.AccessControl`. These are supplied through the .NET SDK/runtime packs, not installed separately on the target PC. Windows provides the native APIs used for process/memory metrics (`kernel32.dll`) and folder/recycle-bin operations (`shell32.dll`); WMI is provided by Windows.
+
+Build and installer tools (not app runtime dependencies):
+
+- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) to build and publish the source.
+- [Inno Setup 6](https://jrsoftware.org/isdl.php) only to compile the shareable Windows installer.
+- PowerShell 5.1 or later to run the included publish, installer, and removal scripts.
+
+Bundled visual asset:
+
 - [Chakra Petch](https://github.com/google/fonts/tree/main/ofl/chakrapetch) — SIL Open Font License; the licence text is included in `src/XinweiManager/Assets/Fonts/OFL.txt`.
+
+Sensor readings depend on what the PC firmware and hardware expose. The app runs without an extra driver, but some sensor access may require elevated hardware access or may be unavailable on a particular device.

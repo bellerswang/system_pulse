@@ -37,6 +37,7 @@ public sealed class SensorService : ISensorService
                 SensorType.Temperature when IsUsableTemperature(sensor.Value.Value) && hardware.HardwareType == HardwareType.Cpu => SensorKind.CpuTemperature,
                 SensorType.Temperature when IsUsableTemperature(sensor.Value.Value) &&
                     (hardware.HardwareType is HardwareType.GpuAmd or HardwareType.GpuIntel or HardwareType.GpuNvidia) => SensorKind.GpuTemperature,
+                SensorType.Load when IsGpu(hardware.HardwareType) && sensor.Value.Value is >= 0 and <= 100 => SensorKind.GpuLoad,
                 SensorType.Fan when sensor.Value.Value >= 0 => SensorKind.Fan,
                 _ => null
             };
@@ -46,6 +47,9 @@ public sealed class SensorService : ISensorService
         }
         foreach (var child in hardware.SubHardware) ReadHardware(child, readings);
     }
+
+    private static bool IsGpu(HardwareType type) =>
+        type is HardwareType.GpuAmd or HardwareType.GpuIntel or HardwareType.GpuNvidia;
 
     public static bool IsUsable(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
     public static bool IsUsableTemperature(float value) => IsUsable(value) && value > 0 && value <= 150;

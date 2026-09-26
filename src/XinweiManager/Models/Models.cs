@@ -3,7 +3,7 @@ namespace XinweiManager.Models;
 public sealed record SystemSnapshot(double? CpuPercent, uint? MemoryPercent,
     ulong? TotalMemoryBytes, ulong? AvailableMemoryBytes, DateTimeOffset SampledAt);
 
-public enum SensorKind { CpuTemperature, GpuTemperature, Fan }
+public enum SensorKind { CpuTemperature, GpuTemperature, GpuLoad, Fan }
 
 public sealed record SensorReading(SensorKind Kind, string Device, string Name,
     float Value, DateTimeOffset SampledAt);
@@ -29,3 +29,8 @@ public sealed record CleanupScanResult(IReadOnlyList<CleanupCandidate> Candidate
 
 public sealed record CleanupResult(long FreedBytes, int Deleted, int Skipped,
     IReadOnlyList<string> Warnings);
+
+public sealed record LargeFileScanResult(IReadOnlyList<CleanupCandidate> Candidates,
+    int Skipped, IReadOnlyList<string> Warnings, DateTimeOffset ScannedAt);
+
+public sealed record LargeFileActionResult(long MovedBytes, int Moved, int Skipped);

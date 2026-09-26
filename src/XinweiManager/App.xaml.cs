@@ -52,10 +52,10 @@ public partial class App : Application
         var startup = new StartupService();
         _viewModel = new MainViewModel(new SystemMetricsService(), new SensorService(),
             new ProcessMetricsService(), new HardwareInventoryService(),
-            CleanupService.CreateDefault(), startup);
+            CleanupService.CreateDefault(), new LargeFileService(), startup);
         _main = new MainWindow(_viewModel);
         MainWindow = _main;
-        _floating = new FloatingShortcutWindow(ShowMain);
+        _floating = new FloatingShortcutWindow(ShowMain, _viewModel);
         _main.IsVisibleChanged += (_, _) => UpdateFloatingShortcut();
         _main.StateChanged += (_, _) => UpdateFloatingShortcut();
         CreateTray();
