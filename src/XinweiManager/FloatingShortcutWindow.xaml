@@ -1,0 +1,23 @@
+<Window x:Class="XinweiManager.FloatingShortcutWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Open System Pulse" Width="86" Height="86"
+        WindowStyle="None" ResizeMode="NoResize" AllowsTransparency="True"
+        Background="Transparent" ShowInTaskbar="False" ShowActivated="False"
+        Topmost="True" MouseLeftButtonUp="Shortcut_Click">
+    <Grid Background="Transparent" Cursor="Hand" ToolTip="Open System Pulse">
+        <Ellipse Width="78" Height="78" Stroke="#6A00E5FF" StrokeThickness="1.5" Fill="#E80B1422">
+            <Ellipse.Effect>
+                <DropShadowEffect Color="#00E5FF" BlurRadius="15" ShadowDepth="0" Opacity="0.55"/>
+            </Ellipse.Effect>
+        </Ellipse>
+        <Ellipse Width="64" Height="64" Stroke="#395E7183" StrokeThickness="1" Fill="#F2111C2A"/>
+        <Path Data="M 43,5 A 38,38 0 0 1 80,43" Stroke="#FCEE0A" StrokeThickness="4"
+              StrokeStartLineCap="Square" StrokeEndLineCap="Square" Fill="Transparent"/>
+        <Path Data="M 43,81 A 38,38 0 0 1 6,43" Stroke="#FF4AAE" StrokeThickness="4"
+              StrokeStartLineCap="Square" StrokeEndLineCap="Square" Fill="Transparent"/>
+        <Path Data="M 23,44 L 32,44 L 37,32 L 44,57 L 50,38 L 55,44 L 64,44"
+              Stroke="#FCEE0A" StrokeThickness="3" StrokeLineJoin="Miter"
+              StrokeStartLineCap="Square" StrokeEndLineCap="Square" Fill="Transparent"/>
+    </Grid>
+</Window>

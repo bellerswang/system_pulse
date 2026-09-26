@@ -1,0 +1,9 @@
+**/bin/
+**/obj/
+.dotnet/
+.dotnet_home/
+.nuget/
+artifacts/
+app/
+dotnet-install.ps1
+
