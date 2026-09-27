@@ -29,7 +29,7 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
     private readonly CancellationTokenSource _life = new();
     private CancellationTokenSource? _operation;
     private CleanupScanResult? _scan;
-    private bool _busy, _windowVisible, _startupEnabled, _cpuExpanded, _memoryExpanded, _isLargeFilesMode;
+    private bool _busy, _windowVisible, _startupEnabled, _cpuExpanded, _memoryExpanded, _isLargeFilesMode, _isLargeFileScanning;
     private string _cpuUsage = "Collecting data…", _memoryUsage = "Collecting data…";
     private string _memoryDetail = "", _cpuTemp = "Collecting data…", _gpuTemp = "Collecting data…";
     private string _gpuUsage = "Collecting data…";
@@ -41,6 +41,7 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
     private string _memoryProcessStatus = "Select to inspect memory use by process.";
     private string _largeFilesStatus = "Choose personal folders, then search for large files.";
     private string _largeFilesActionResult = "";
+    private string _largeFilesProgressText = "Ready to search.";
     private int _largeFileAgeDays = 180;
     private int _largeFileMinimumMegabytes = 500;
     private double _cpuLoad, _memoryLoad, _gpuLoad;
@@ -121,6 +122,8 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
     public int LargeFileAgeDays { get => _largeFileAgeDays; set => Set(ref _largeFileAgeDays, value); }
     public string LargeFilesStatus { get => _largeFilesStatus; private set => Set(ref _largeFilesStatus, value); }
     public string LargeFilesActionResult { get => _largeFilesActionResult; private set => Set(ref _largeFilesActionResult, value); }
+    public bool IsLargeFileScanning { get => _isLargeFileScanning; private set => Set(ref _isLargeFileScanning, value); }
+    public string LargeFilesProgressText { get => _largeFilesProgressText; private set => Set(ref _largeFilesProgressText, value); }
     public string LargeFilesSelectedSummary =>
         $"{LargeFileItems.Count(x => x.IsSelected)} selected  ·  {FormatBytes(LargeFileItems.Where(x => x.IsSelected).Sum(x => x.Candidate.Length))}";
     public bool CpuExpanded { get => _cpuExpanded; private set { if (Set(ref _cpuExpanded, value)) Notify(nameof(CpuToggleLabel)); } }
@@ -443,15 +446,24 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
         { LargeFilesStatus = "Select at least one personal folder to search."; return; }
 
         Busy = true;
+        IsLargeFileScanning = true;
         _operation = new CancellationTokenSource();
         LargeFilesStatus = "Searching selected folders…";
+        LargeFilesProgressText = "Preparing scan…";
         LargeFilesActionResult = "";
         LargeFileItems.Clear();
         Notify(nameof(LargeFilesSelectedSummary));
         try
         {
+            var progress = new Progress<LargeFileScanProgress>(update =>
+            {
+                var location = string.IsNullOrWhiteSpace(update.CurrentDirectory)
+                    ? ""
+                    : $"  ·  {Path.GetFileName(Path.TrimEndingDirectorySeparator(update.CurrentDirectory))}";
+                LargeFilesProgressText = $"{update.ItemsVisited:N0} items checked  ·  {update.DirectoriesVisited:N0} folders visited  ·  {update.CandidatesFound:N0} matches{location}";
+            });
             var result = await _largeFiles.ScanAsync(roots,
-                (long)LargeFileMinimumMegabytes * 1024 * 1024, LargeFileAgeDays, _operation.Token);
+                (long)LargeFileMinimumMegabytes * 1024 * 1024, LargeFileAgeDays, progress, _operation.Token);
             foreach (var candidate in result.Candidates)
             {
                 var item = new LargeFileItem(candidate);
@@ -468,7 +480,7 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
         { LargeFilesStatus = "Search cancelled."; }
         catch (Exception ex)
         { LargeFilesStatus = "The search could not be completed."; LocalLog.Error("large file search", ex); }
-        finally { _operation.Dispose(); _operation = null; Busy = false; }
+        finally { _operation.Dispose(); _operation = null; IsLargeFileScanning = false; Busy = false; }
     }
 
     private async Task MoveLargeFilesAsync()
@@ -484,10 +496,20 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
         try
         {
             var result = await _largeFiles.MoveToRecycleBinAsync(selected, _operation.Token);
-            foreach (var item in selectedItems) item.IsSelected = false;
+            var movedPaths = new HashSet<string>(result.MovedPaths, StringComparer.OrdinalIgnoreCase);
+            foreach (var item in selectedItems.Where(x => movedPaths.Contains(Path.GetFullPath(x.Candidate.FullPath))).ToArray())
+            {
+                item.PropertyChanged -= LargeFileSelectionChanged;
+                LargeFileItems.Remove(item);
+            }
             LargeFilesActionResult = $"Moved to Recycle Bin: {result.Moved:N0} file(s) · {FormatBytes(result.MovedBytes)} · Skipped: {result.Skipped:N0}";
-            LargeFilesStatus = "Files in the Recycle Bin can be restored until the bin is emptied.";
+            LargeFilesStatus = result.Cancelled
+                ? "Action cancelled. Successfully moved files were removed from this list."
+                : result.Moved > 0
+                    ? "Moved files were removed from the results. Files in the Recycle Bin can be restored."
+                    : "No files were moved. The selected results remain available for review.";
             Notify(nameof(LargeFilesSelectedSummary));
+            CommandManager.InvalidateRequerySuggested();
         }
         catch (OperationCanceledException)
         { LargeFilesStatus = "Action cancelled. Some files may already have been moved; search again to refresh results."; }

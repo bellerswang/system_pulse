@@ -1,6 +1,9 @@
 using System.Drawing;
+using System.Diagnostics;
 using System.IO.Pipes;
+using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Interop;
 using System.Windows.Forms;
 using XinweiManager.Services;
 using XinweiManager.ViewModels;
@@ -11,6 +14,7 @@ namespace XinweiManager;
 public partial class App : Application
 {
     private const string PipeName = "SystemPulse.Session";
+    private const int SwRestore = 9;
     private Mutex? _singleInstance;
     private CancellationTokenSource? _pipeLife;
     private NotifyIcon? _tray;
@@ -34,6 +38,7 @@ public partial class App : Application
         _singleInstance = new Mutex(true, @"Local\SystemPulse", out bool created);
         if (!created)
         {
+            var notified = false;
             try
             {
                 using var client = new NamedPipeClientStream(".", PipeName, PipeDirection.Out,
@@ -41,8 +46,14 @@ public partial class App : Application
                 client.Connect(1500);
                 using var writer = new StreamWriter(client) { AutoFlush = true };
                 writer.WriteLine("show");
+                notified = true;
             }
             catch (Exception ex) { LocalLog.Error("single instance", ex); }
+
+            // A process started at a different integrity level can be denied access to the
+            // current-user pipe. Fall back to the existing WPF window handle so launching
+            // the shortcut still restores the already-running app.
+            if (!notified) ActivateExistingWindow();
             Shutdown();
             return;
         }
@@ -54,6 +65,9 @@ public partial class App : Application
             new ProcessMetricsService(), new HardwareInventoryService(),
             CleanupService.CreateDefault(), new LargeFileService(), startup);
         _main = new MainWindow(_viewModel);
+        // Create the native handle even when --background starts the app hidden. A later
+        // launch can then find and restore the window if pipe signaling is unavailable.
+        _ = new WindowInteropHelper(_main).EnsureHandle();
         MainWindow = _main;
         _floating = new FloatingShortcutWindow(ShowMain, _viewModel);
         _main.IsVisibleChanged += (_, _) => UpdateFloatingShortcut();
@@ -100,7 +114,12 @@ public partial class App : Application
             _floatingMenu.Checked = _floatingEnabled;
             UpdateFloatingShortcut();
         });
-        var menu = new ContextMenuStrip();
+        var menu = new ContextMenuStrip
+        {
+            BackColor = Color.FromArgb(18, 30, 44),
+            ForeColor = Color.FromArgb(244, 247, 251),
+            Renderer = new ToolStripProfessionalRenderer(new CyberdeckColorTable())
+        };
         menu.Items.Add("Open System Pulse", null, (_, _) => Dispatcher.Invoke(ShowMain));
         menu.Items.Add(_floatingMenu);
         menu.Items.Add(_startupMenu);
@@ -127,6 +146,41 @@ public partial class App : Application
         _main.Activate();
         UpdateFloatingShortcut();
     }
+
+    private static void ActivateExistingWindow()
+    {
+        var processIds = Process.GetProcessesByName("SystemPulse")
+            .Where(process => process.Id != Environment.ProcessId)
+            .Select(process => process.Id)
+            .ToHashSet();
+        if (processIds.Count == 0) return;
+
+        EnumWindows((handle, _) =>
+        {
+            GetWindowThreadProcessId(handle, out var processId);
+            if (!processIds.Contains((int)processId)) return true;
+            ShowWindow(handle, SwRestore);
+            SetForegroundWindow(handle);
+            return false;
+        }, IntPtr.Zero);
+    }
+
+    private delegate bool EnumWindowsProc(IntPtr window, IntPtr state);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr state);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ShowWindow(IntPtr window, int command);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetForegroundWindow(IntPtr window);
 
     private void UpdateFloatingShortcut()
     {
@@ -158,5 +212,26 @@ public partial class App : Application
         _singleInstance?.Dispose();
         _pipeLife?.Dispose();
         base.OnExit(e);
+    }
+
+    private sealed class CyberdeckColorTable : ProfessionalColorTable
+    {
+        private static readonly Color Deck = Color.FromArgb(18, 30, 44);
+        private static readonly Color Hover = Color.FromArgb(32, 55, 73);
+        private static readonly Color Cyan = Color.FromArgb(0, 229, 255);
+        private static readonly Color Line = Color.FromArgb(59, 80, 98);
+
+        public override Color ToolStripDropDownBackground => Deck;
+        public override Color MenuItemSelected => Hover;
+        public override Color MenuItemBorder => Cyan;
+        public override Color MenuBorder => Cyan;
+        public override Color SeparatorDark => Line;
+        public override Color SeparatorLight => Deck;
+        public override Color ImageMarginGradientBegin => Deck;
+        public override Color ImageMarginGradientMiddle => Deck;
+        public override Color ImageMarginGradientEnd => Deck;
+        public override Color MenuItemPressedGradientBegin => Color.FromArgb(38, 56, 71);
+        public override Color MenuItemPressedGradientMiddle => Color.FromArgb(38, 56, 71);
+        public override Color MenuItemPressedGradientEnd => Color.FromArgb(38, 56, 71);
     }
 }

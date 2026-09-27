@@ -70,9 +70,9 @@
                     <Image Source="/SystemPulse;component/Assets/Brand/SystemPulse.png" Width="39" Height="39"
                            VerticalAlignment="Center" Margin="0,0,12,0"/>
                     <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                        <TextBlock Text="SYSTEM // PULSE" FontFamily="{StaticResource DisplayFont}" FontSize="25" FontWeight="Bold"
+                        <TextBlock Text="CYBERDECK // SYSTEM PULSE" FontFamily="{StaticResource DisplayFont}" FontSize="25" FontWeight="Bold"
                                    FontStyle="Italic" Foreground="{StaticResource YellowBrush}"/>
-                        <TextBlock Text="LOCAL DEVICE CONSOLE" FontFamily="{StaticResource DisplayFont}"
+                        <TextBlock Text="CYBERDECK // LOCAL TELEMETRY" FontFamily="{StaticResource DisplayFont}"
                                    FontSize="10" FontWeight="Bold" Foreground="{StaticResource CyanBrush}" Margin="2,0,0,0"/>
                     </StackPanel>
                     <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
@@ -277,6 +277,12 @@
                                 <Button Content="CANCEL" Command="{Binding CancelCommand}" DockPanel.Dock="Right" Padding="10,6"/>
                                 <TextBlock Text="{Binding LargeFilesStatus}" FontSize="13" VerticalAlignment="Center"/>
                             </DockPanel>
+                            <StackPanel Visibility="{Binding IsLargeFileScanning, Converter={StaticResource BoolVisibility}}"
+                                        Margin="0,0,0,9">
+                                <ProgressBar IsIndeterminate="True" Style="{StaticResource CyberScanProgress}"/>
+                                <TextBlock Text="{Binding LargeFilesProgressText}" FontSize="10"
+                                           Foreground="{StaticResource YellowBrush}" Margin="0,5,0,0"/>
+                            </StackPanel>
                             <DockPanel>
                                 <Button Content="MOVE SELECTED TO RECYCLE BIN" Command="{Binding MoveLargeFilesCommand}"
                                         DockPanel.Dock="Right" Foreground="{StaticResource PinkBrush}" BorderBrush="{StaticResource PinkBrush}"/>

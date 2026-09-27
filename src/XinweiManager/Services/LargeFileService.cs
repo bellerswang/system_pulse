@@ -1,4 +1,5 @@
 using Microsoft.VisualBasic.FileIO;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using XinweiManager.Models;
 
@@ -67,7 +68,7 @@ public sealed class LargeFileService : ILargeFileService
     }
 
     public Task<LargeFileScanResult> ScanAsync(IEnumerable<string> roots, long minimumBytes,
-        int minimumAgeDays, CancellationToken token) => Task.Run(() =>
+        int minimumAgeDays, IProgress<LargeFileScanProgress>? progress, CancellationToken token) => Task.Run(() =>
     {
         if (minimumBytes < 1 || minimumAgeDays < 1)
             throw new ArgumentOutOfRangeException(nameof(minimumAgeDays));
@@ -75,6 +76,9 @@ public sealed class LargeFileService : ILargeFileService
         var candidates = new List<CleanupCandidate>();
         var warnings = new List<string>();
         var skipped = 0;
+        var itemsVisited = 0;
+        var directoriesVisited = 0;
+        var lastProgress = Stopwatch.GetTimestamp();
         var cutoff = DateTime.UtcNow.AddDays(-minimumAgeDays);
 
         foreach (var providedRoot in roots.Select(Normalize).Distinct(StringComparer.OrdinalIgnoreCase))
@@ -89,13 +93,23 @@ public sealed class LargeFileService : ILargeFileService
             {
                 token.ThrowIfCancellationRequested();
                 var directory = pending.Pop();
+                directoriesVisited++;
                 if (IsInsideApplicationFolder(directory)) continue;
+                progress?.Report(new LargeFileScanProgress(itemsVisited, directoriesVisited,
+                    candidates.Count, directory));
 
                 try
                 {
                     foreach (var path in Directory.EnumerateFileSystemEntries(directory))
                     {
                         token.ThrowIfCancellationRequested();
+                        itemsVisited++;
+                        if (itemsVisited % 64 == 0 || Stopwatch.GetElapsedTime(lastProgress).TotalMilliseconds >= 150)
+                        {
+                            progress?.Report(new LargeFileScanProgress(itemsVisited, directoriesVisited,
+                                candidates.Count, directory));
+                            lastProgress = Stopwatch.GetTimestamp();
+                        }
                         try
                         {
                             var attributes = File.GetAttributes(path);
@@ -107,13 +121,15 @@ public sealed class LargeFileService : ILargeFileService
                             {
                                 if (ExcludedDirectoryNames.Contains(Path.GetFileName(path))) { skipped++; continue; }
                                 pending.Push(path);
-                                continue;
+                            }
+                            else
+                            {
+                                var info = new FileInfo(path);
+                                if (info.Length >= minimumBytes && info.LastWriteTimeUtc <= cutoff)
+                                    candidates.Add(new CleanupCandidate(providedRoot, info.FullName,
+                                        Path.GetRelativePath(providedRoot, info.FullName), info.Length, info.LastWriteTimeUtc));
                             }
 
-                            var info = new FileInfo(path);
-                            if (info.Length < minimumBytes || info.LastWriteTimeUtc > cutoff) continue;
-                            candidates.Add(new CleanupCandidate(providedRoot, info.FullName,
-                                Path.GetRelativePath(providedRoot, info.FullName), info.Length, info.LastWriteTimeUtc));
                         }
                         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
                         { skipped++; }
@@ -124,6 +140,9 @@ public sealed class LargeFileService : ILargeFileService
             }
         }
 
+        token.ThrowIfCancellationRequested();
+        progress?.Report(new LargeFileScanProgress(itemsVisited, directoriesVisited,
+            candidates.Count, string.Empty));
         return new LargeFileScanResult(candidates.OrderByDescending(x => x.Length).ToArray(), skipped,
             warnings.Distinct().ToArray(), DateTimeOffset.Now);
     }, token);
@@ -134,10 +153,12 @@ public sealed class LargeFileService : ILargeFileService
         long movedBytes = 0;
         var moved = 0;
         var skipped = 0;
+        var movedPaths = new List<string>();
+        var cancelled = false;
 
         foreach (var candidate in candidates)
         {
-            token.ThrowIfCancellationRequested();
+            if (token.IsCancellationRequested) { cancelled = true; break; }
             try
             {
                 var root = Normalize(candidate.Root);
@@ -156,12 +177,13 @@ public sealed class LargeFileService : ILargeFileService
                 FileSystem.DeleteFile(fullPath, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin);
                 movedBytes += candidate.Length;
                 moved++;
+                movedPaths.Add(fullPath);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
             { skipped++; }
         }
 
-        return new LargeFileActionResult(movedBytes, moved, skipped);
+        return new LargeFileActionResult(movedBytes, moved, skipped, movedPaths, cancelled);
     }, token);
 
     private bool IsSafeChild(string root, string path)

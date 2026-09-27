@@ -4,7 +4,10 @@
         Title="Open System Pulse" Width="294" Height="174"
         WindowStyle="None" ResizeMode="NoResize" AllowsTransparency="True"
         Background="Transparent" ShowInTaskbar="False" ShowActivated="False"
-        Topmost="True" MouseLeftButtonUp="Shortcut_Click">
+        Topmost="True"
+        MouseLeftButtonDown="Floating_MouseLeftButtonDown"
+        MouseMove="Floating_MouseMove"
+        MouseLeftButtonUp="Floating_MouseLeftButtonUp">
     <Window.Resources>
         <Style x:Key="DeckMeter" TargetType="ProgressBar">
             <Setter Property="Maximum" Value="100"/>
@@ -19,7 +22,7 @@
             </Setter>
         </Style>
     </Window.Resources>
-    <Grid Background="Transparent" Cursor="Hand" ToolTip="Open System Pulse · live CPU, GPU and memory telemetry">
+    <Grid Background="Transparent" Cursor="SizeAll" ToolTip="Drag to move · click to open System Pulse">
         <Path Data="M 12,2 L 274,2 L 292,20 L 292,154 L 282,172 L 2,172 L 2,14 Z"
               Fill="#F00B1422" Stroke="#8064EFFF" StrokeThickness="1.2">
             <Path.Effect>

@@ -20,7 +20,7 @@ public interface ILargeFileService
     IReadOnlyList<(string Name, string Path)> GetDefaultLocations();
     bool IsSafeRoot(string path, out string reason);
     Task<LargeFileScanResult> ScanAsync(IEnumerable<string> roots, long minimumBytes,
-        int minimumAgeDays, CancellationToken token);
+        int minimumAgeDays, IProgress<LargeFileScanProgress>? progress, CancellationToken token);
     Task<LargeFileActionResult> MoveToRecycleBinAsync(IEnumerable<CleanupCandidate> candidates,
         CancellationToken token);
 }

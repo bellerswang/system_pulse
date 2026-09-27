@@ -33,4 +33,8 @@ public sealed record CleanupResult(long FreedBytes, int Deleted, int Skipped,
 public sealed record LargeFileScanResult(IReadOnlyList<CleanupCandidate> Candidates,
     int Skipped, IReadOnlyList<string> Warnings, DateTimeOffset ScannedAt);
 
-public sealed record LargeFileActionResult(long MovedBytes, int Moved, int Skipped);
+public sealed record LargeFileScanProgress(int ItemsVisited, int DirectoriesVisited,
+    int CandidatesFound, string CurrentDirectory);
+
+public sealed record LargeFileActionResult(long MovedBytes, int Moved, int Skipped,
+    IReadOnlyList<string> MovedPaths, bool Cancelled = false);
